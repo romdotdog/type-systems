@@ -1,28 +1,14 @@
-module algorithm-j
+module algorithm-w
 
 import hm-expr
 import std/data/linearset
+import std/data/linearmap
 import std/test
-
-type tyvar
-  Bound(ty : ty)
-  Unbound(id : int)
-
-fun tyvar/show(this : tyvar, left : bool = False) : <div,read<global>> string
-  match this
-    Bound(ty) -> ty.show(left)
-    Unbound(id) -> char(97 + id).string
-
-fun tyvar/(==)(t1 : tyvar, t2 : tyvar)
-  match (t1, t2)
-    (Bound(t1), Bound(t2)) -> t1 == t2
-    (Unbound(id1), Unbound(id2)) -> id1 == id2
-    _ -> False
 
 type ty
   TUnit
   TFn(tau1 : ty, tau2 : ty)
-  TVar(cell : ref<global, tyvar>)
+  TVar(id : int)
 
 fun ty/show(this : ty, left = False) : <div,read<global>> string
   match this
@@ -32,12 +18,12 @@ fun ty/show(this : ty, left = False) : <div,read<global>> string
         "(" ++ tau1.show(True) ++ " -> " ++ tau2.show ++ ")"
       else
         tau1.show(True) ++ " -> " ++ tau2.show
-    TVar(cell) -> (!cell).show(left)
+    TVar(id) -> char(97 + id).string
 
 fun ty/(==)(t1 : ty, t2 : ty)
   match (t1, t2)
     (TUnit, TUnit) -> True
-    (TVar(cell1), TVar(cell2)) -> !cell1 == !cell2
+    (TVar(id1), TVar(id2)) -> id1 == id2
     (TFn(p1, r1), TFn(p2, r2)) -> p1 == p2 && r1 == r2
     _ -> False
 
@@ -58,13 +44,16 @@ fun extend(env : env, id : int, scheme : ty-scheme)
 
 effect val gamma : env
 
+alias subst = linearMap<int, ty>
+
+// composition
+fun after(post : subst, pre : subst)
+  pre.union(post.map(fn(k, v) v.do-sub(pre)))
+
 fun ty/free-vars(t : ty) : <div,read<global>> linearSet<int>
   match t
     TUnit -> linear-set([])
-    TVar(cell) ->
-      match !cell
-        Bound(t') -> free-vars(t')
-        Unbound(id) -> linear-set([id])
+    TVar(id) -> linear-set([id])
     TFn(param, result) -> 
       free-vars(param) + free-vars(result)
 
@@ -77,60 +66,53 @@ fun env/free-vars(env : env) : <div,read<global>> linearSet<int>
   env.vars.map(fn((_, scheme)) scheme.free-vars()).foldr(linear-set([]), set/(+))
 
 fun new-tvar()
-  TVar(ref(Unbound(new-var())))
+  TVar(new-var())
 
-fun infer(expr : expr) : <st<global>,div,exn,fresh,gamma> ty
+fun infer(expr : expr) : <st<global>,div,exn,fresh,gamma> (ty, subst)
   match expr
-    Unit -> TUnit
+    Unit -> (TUnit, LinearMap([]))
     Var(x) -> 
       match gamma.lookup(x)
-        Just(sigma) -> sigma.instantiate()
+        Just(sigma) -> (sigma.instantiate(), LinearMap([]))
         Nothing -> throw("unbound variable")
     App(e0, e1) ->
-      val tau0 = e0.infer()
-      val tau1 = e1.infer()
+      val (tau0, s0) = e0.infer()
+      val (tau1, s1) = (handler { val gamma = gamma.do-sub(s0) }) fn() e1.infer()
       val tau' = new-tvar()
-      unify(tau0, TFn(tau1, tau'))
-      tau'
+      val s2 = mgu(tau0.do-sub(s1), TFn(tau1, tau'))
+      (tau'.do-sub(s2), s2.after(s1).after(s0))
     Abs(x, e) ->
       val tau = new-tvar()
       with val gamma = gamma.extend(x, Mono(tau))
-      val tau' = e.infer()
-      TFn(tau, tau')
+      val (tau', s) = e.infer()
+      (TFn(tau.do-sub(s), tau'), s)
     Let(x, e0, e1) ->
-      val sigma = e0.infer().generalize()
-      with val gamma = gamma.extend(x, sigma)
-      e1.infer()
+      val (tau, s0) = e0.infer()
+      with val gamma = gamma.do-sub(s0).extend(x, tau.generalize())
+      val (tau', s1) = e1.infer()
+      (tau', s1.after(s0))
 
-fun unify(t1 : ty, t2 : ty)
+fun mgu(t1 : ty, t2 : ty)
   match (t1, t2)
-    (TUnit, TUnit) -> ()
-    (TVar(cell), b) -> 
-      match !cell
-        Bound(a') -> unify(a', b)
-        Unbound(a-id) ->
-          if t1 == t2 then () else
-            if a-id.occurs-in(b) then throw("occurs check") else
-              cell := Bound(b)
-    (a, TVar(cell)) ->
-      match !cell
-        Bound(b') -> unify(a, b')
-        Unbound(b-id) ->
-          if t1 == t2 then () else
-            if b-id.occurs-in(a) then throw("occurs check") else
-              cell := Bound(a)
+    (TUnit, TUnit) -> LinearMap([])
+    (TVar(a-id), b) -> 
+      if t1 == t2 then LinearMap([]) else
+        if a-id.occurs-in(b) then throw("occurs check") else
+          LinearMap([(a-id, b)])
+    (a, TVar(b-id)) ->
+      if t1 == t2 then LinearMap([]) else
+        if b-id.occurs-in(a) then throw("occurs check") else
+          LinearMap([(b-id, a)])
     (TFn(a, b), TFn(c, d)) ->
-      unify(a, c)
-      unify(b, d)
+      val s1 = mgu(a, c)
+      val s2 = mgu(b.do-sub(s1), d.do-sub(s1))
+      s1.after(s2)
     _ -> throw("type error")
 
 fun occurs-in(id : int, t : ty)
   match t
     TUnit -> False
-    TVar(cell) -> 
-      match !cell
-        Bound(t') -> id.occurs-in(t')
-        Unbound(id') -> id == id'
+    TVar(id') -> id == id'
     TFn(t1, t2) -> id.occurs-in(t1) || id.occurs-in(t2)
 
 fun generalize(t : ty) : <div,gamma,read<global>> ty-scheme
@@ -140,7 +122,7 @@ fun generalize(t : ty) : <div,gamma,read<global>> ty-scheme
   else 
     Poly(to-quantify, t)
 
-effect subst
+effect subst-eff
   fun lookup-var(id : int) : maybe<ty>
 
 fun instantiate(scheme : ty-scheme)
@@ -154,16 +136,31 @@ fun instantiate(scheme : ty-scheme)
           Nothing
       t.substitute()
 
+fun env/do-sub(env : env, subst : subst) : <div> env
+  Env(env.vars.map(fn((k, scheme)) (k, scheme.do-sub(subst))))
+
+fun ty-scheme/do-sub(scheme : ty-scheme, subst : subst) : <div> ty-scheme
+  match scheme
+    Mono(t) -> Mono(t.do-sub(subst))
+    Poly(vars, t) -> 
+      with fun lookup-var(id) -> 
+        if vars.member(id) then // shouldn't apply substitutions to quantified vars
+          Nothing
+        else
+          subst.lookup(id)
+      Poly(vars, t.substitute())
+
+fun ty/do-sub(t : ty, subst : subst) : <div> ty
+  with fun lookup-var(id) -> subst.lookup(id)
+  t.substitute()
+
 fun substitute(t : ty)
   match t
     TUnit -> TUnit
-    TVar(cell) -> 
-      match !cell
-        Bound(t') -> t'.substitute()
-        Unbound(id) ->
-          match lookup-var(id)
-            Just(new-t) -> new-t.substitute()
-            Nothing -> t
+    TVar(id) -> 
+      match lookup-var(id)
+        Just(new-t) -> new-t.substitute()
+        Nothing -> t
     TFn(param, result) -> 
       TFn(param.substitute(), result.substitute())
 
@@ -171,7 +168,8 @@ fun run(expr : expr)
   var counter := 0
   with fun new-var() { counter := counter + 1; counter }
   with val gamma = Env([])
-  expr.infer().show().println()
+  val (tau, s) = expr.infer()
+  tau.do-sub(s).show().println()
 
 pub fun main()
   // id: \f.\x. f x  :  (a -> b) -> a -> b
