@@ -1,4 +1,4 @@
-module algorithm-j
+module algorithm-j-levels
 
 import hm-expr
 import std/data/linearset
@@ -6,7 +6,7 @@ import std/test
 
 type tyvar
   Bound(ty : ty)
-  Unbound(id : int)
+  Unbound(id : int, level : int)
 
 fun tyvar/show(this : tyvar, left : bool = False) : <div,read<global>> string
   match this
@@ -57,29 +57,26 @@ fun extend(env : env, id : int, scheme : ty-scheme)
   Env(Cons((id, scheme), env.vars))
 
 effect val gamma : env
+effect val current-level : int
 
-fun ty/free-vars(t : ty) : <div,read<global>> linearSet<int>
+fun to-quantify(t : ty) : <div,read<global>,current-level> linearSet<int>
   match t
     TUnit -> linear-set([])
     TVar(cell) ->
       match !cell
-        Bound(t') -> free-vars(t')
-        Unbound(id) -> linear-set([id])
+        Bound(t') -> to-quantify(t')
+        Unbound(id, level) -> 
+          if level > current-level then
+            linear-set([id])
+          else
+            linear-set([])
     TFn(param, result) -> 
-      free-vars(param) + free-vars(result)
-
-fun ty-scheme/free-vars(sigma : ty-scheme) : <div,read<global>> linearSet<int>
-  match sigma
-    Mono(tau) -> tau.free-vars()
-    Poly(vars, tau) -> tau.free-vars() - vars
-
-fun env/free-vars(env : env) : <div,read<global>> linearSet<int>
-   env.vars.map(fn((_, scheme)) scheme.free-vars()).foldr(linear-set([]), set/(+))
+      to-quantify(param) + to-quantify(result)
 
 fun new-tvar()
-  TVar(ref(Unbound(new-var())))
+  TVar(ref(Unbound(new-var(), current-level)))
 
-fun infer(expr : expr) : <st<global>,div,exn,fresh,gamma> ty
+fun infer(expr : expr) : <st<global>,div,exn,fresh,gamma,current-level> ty
   match expr
     Unit -> TUnit
     Var(x) -> 
@@ -98,8 +95,8 @@ fun infer(expr : expr) : <st<global>,div,exn,fresh,gamma> ty
       val tau' = e.infer()
       TFn(tau, tau')
     Let(x, e0, e1) ->
-      val sigma = e0.infer().generalize()
-      with val gamma = gamma.extend(x, sigma)
+      val sigma = (handler { val current-level = current-level + 1 }) fn() e0.infer()
+      with val gamma = gamma.extend(x, sigma.generalize())
       e1.infer()
 
 fun unify(t1 : ty, t2 : ty)
@@ -108,33 +105,39 @@ fun unify(t1 : ty, t2 : ty)
     (TVar(cell), b) -> 
       match !cell
         Bound(a') -> unify(a', b)
-        Unbound(a-id) ->
+        Unbound(a-id, a-level) ->
           if t1 == t2 then () else
-            if a-id.occurs-in(b) then throw("occurs check") else
+            if (a-id, a-level).occurs-in(b) then throw("occurs check") else
               cell := Bound(b)
     (a, TVar(cell)) ->
       match !cell
         Bound(b') -> unify(a, b')
-        Unbound(b-id) ->
+        Unbound(b-id, b-level) ->
           if t1 == t2 then () else
-            if b-id.occurs-in(a) then throw("occurs check") else
+            if (b-id, b-level).occurs-in(a) then throw("occurs check") else
               cell := Bound(a)
     (TFn(a, b), TFn(c, d)) ->
       unify(a, c)
       unify(b, d)
     _ -> throw("type error")
 
-fun occurs-in(id : int, t : ty)
+// occurs check
+fun occurs-in(a : (int, int), t : ty)
   match t
     TUnit -> False
-    TVar(cell) -> 
-      match !cell
-        Bound(t') -> id.occurs-in(t')
-        Unbound(id') -> id == id'
-    TFn(t1, t2) -> id.occurs-in(t1) || id.occurs-in(t2)
+    TVar(t-cell) -> 
+      match !t-cell
+        Bound(t') -> a.occurs-in(t')
+        Unbound(t-id, t-level) -> 
+          val (a-id, a-level) = a
+          val min-level = min(a-level, t-level)
+          t-cell := Unbound(t-id, min-level)
+          // we don't update a because it's going to become bound anyway
+          a-id == t-id
+    TFn(t1, t2) -> a.occurs-in(t1) || a.occurs-in(t2)
 
-fun generalize(t : ty) : <div,gamma,read<global>> ty-scheme
-  val to-quantify = t.free-vars() - gamma.free-vars()
+fun generalize(t : ty) : <div,gamma,current-level,read<global>> ty-scheme
+  val to-quantify = t.to-quantify()
   if to-quantify.is-empty then 
     Mono(t)
   else 
@@ -171,6 +174,7 @@ fun run(expr : expr)
   var counter := 0
   with fun new-var() { counter := counter + 1; counter }
   with val gamma = Env([])
+  with val current-level = 0
   expr.infer().show().println()
 
 pub fun main()
