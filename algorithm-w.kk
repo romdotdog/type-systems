@@ -129,11 +129,9 @@ fun instantiate(scheme : ty-scheme)
   match scheme
     Mono(t) -> t
     Poly(vars, t) -> 
+      val new-tvars = vars.list().map(fn (id) (id, new-tvar()))
       with fun lookup-var(id) -> 
-        if vars.member(id) then 
-          Just(new-tvar())
-        else 
-          Nothing
+        new-tvars.lookup(id)
       t.substitute()
 
 fun env/do-sub(env : env, subst : subst) : <div> env
@@ -192,6 +190,9 @@ pub fun main()
 
   // let-identity: \x. let y = x in y: 'a -> 'a
   Abs(0, Let(1, Var(0), Var(1))).run()
+
+  // let-identity-2: \f. \x. \y. let id = \z. z in f x (id x) y (id y)
+  Abs(0, Abs(1, Abs(2, Let(3, Abs(4, Var(4)), App(App(App(App(Var(0), Var(1)), App(Var(3), Var(1))), Var(2)), App(Var(3), Var(2))))))).run()
 
   // let-const: \x. let y = \z.x in y: 'a -> 'b -> 'a
   Abs(0, Let(1, Abs(2, Var(0)), Var(1))).run()

@@ -140,32 +140,24 @@ fun generalize(t : ty) : <div,gamma,read<global>> ty-scheme
   else 
     Poly(to-quantify, t)
 
-effect subst
-  fun lookup-var(id : int) : maybe<ty>
-
 fun instantiate(scheme : ty-scheme)
   match scheme
     Mono(t) -> t
     Poly(vars, t) -> 
-      with fun lookup-var(id) -> 
-        if vars.member(id) then 
-          Just(new-tvar())
-        else 
-          Nothing
-      t.substitute()
+      t.substitute(vars.list().map(fn (id) (id, new-tvar())))
 
-fun substitute(t : ty)
+fun substitute(t : ty, subst: list<(int, ty)>)
   match t
     TUnit -> TUnit
     TVar(cell) -> 
       match !cell
-        Bound(t') -> t'.substitute()
+        Bound(t') -> t'.substitute(subst)
         Unbound(id) ->
-          match lookup-var(id)
-            Just(new-t) -> new-t.substitute()
+          match subst.lookup(fn(id') id == id')
+            Just(new-t) -> new-t.substitute(subst)
             Nothing -> t
     TFn(param, result) -> 
-      TFn(param.substitute(), result.substitute())
+      TFn(param.substitute(subst), result.substitute(subst))
 
 fun run(expr : expr)
   var counter := 0
@@ -194,6 +186,9 @@ pub fun main()
 
   // let-identity: \x. let y = x in y: 'a -> 'a
   Abs(0, Let(1, Var(0), Var(1))).run()
+
+  // let-identity-2: \f. \x. \y. let id = \z. z in f x (id x) y (id y)
+  Abs(0, Abs(1, Abs(2, Let(3, Abs(4, Var(4)), App(App(App(App(Var(0), Var(1)), App(Var(3), Var(1))), Var(2)), App(Var(3), Var(2))))))).run()
 
   // let-const: \x. let y = \z.x in y: 'a -> 'b -> 'a
   Abs(0, Let(1, Abs(2, Var(0)), Var(1))).run()
