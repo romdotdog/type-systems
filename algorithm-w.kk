@@ -1,3 +1,5 @@
+// https://en.wikipedia.org/wiki/Hindley%E2%80%93Milner_type_system#Algorithm_W
+
 module algorithm-w
 
 import hm-expr
@@ -48,7 +50,7 @@ alias subst = linearMap<int, ty>
 
 // composition
 fun after(post : subst, pre : subst)
-  pre.union(post.map(fn(k, v) v.do-sub(pre)))
+  post.union(pre.map(fn(k, v) v.do-sub(post)))
 
 fun ty/free-vars(t : ty) : <div,read<global>> linearSet<int>
   match t
@@ -63,7 +65,7 @@ fun ty-scheme/free-vars(sigma : ty-scheme) : <div,read<global>> linearSet<int>
     Poly(vars, tau) -> tau.free-vars() - vars
 
 fun env/free-vars(env : env) : <div,read<global>> linearSet<int>
-  env.vars.map(fn((_, scheme)) scheme.free-vars()).foldr(linear-set([]), set/(+))
+  env.vars.map(fn((_, scheme)) scheme.free-vars()).foldl(linear-set([]), set/(+))
 
 fun new-tvar()
   TVar(new-var())
@@ -157,7 +159,7 @@ fun substitute(t : ty)
     TUnit -> TUnit
     TVar(id) -> 
       match lookup-var(id)
-        Just(new-t) -> new-t.substitute()
+        Just(new-t) -> new-t
         Nothing -> t
     TFn(param, result) -> 
       TFn(param.substitute(), result.substitute())

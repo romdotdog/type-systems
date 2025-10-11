@@ -1,3 +1,5 @@
+// https://en.wikipedia.org/wiki/Hindley%E2%80%93Milner_type_system#Algorithm_J
+
 module algorithm-j
 
 import hm-expr
@@ -74,7 +76,7 @@ fun ty-scheme/free-vars(sigma : ty-scheme) : <div,read<global>> linearSet<int>
     Poly(vars, tau) -> tau.free-vars() - vars
 
 fun env/free-vars(env : env) : <div,read<global>> linearSet<int>
-  env.vars.map(fn((_, scheme)) scheme.free-vars()).foldr(linear-set([]), set/(+))
+  env.vars.map(fn((_, scheme)) scheme.free-vars()).foldl(linear-set([]), set/(+))
 
 fun new-tvar()
   TVar(ref(Unbound(new-var())))
@@ -154,7 +156,7 @@ fun substitute(t : ty, subst: list<(int, ty)>)
         Bound(t') -> t'.substitute(subst)
         Unbound(id) ->
           match subst.lookup(fn(id') id == id')
-            Just(new-t) -> new-t.substitute(subst)
+            Just(new-t) -> new-t
             Nothing -> t
     TFn(param, result) -> 
       TFn(param.substitute(subst), result.substitute(subst))

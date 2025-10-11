@@ -1,3 +1,6 @@
+// https://en.wikipedia.org/wiki/Hindley%E2%80%93Milner_type_system#Algorithm_J
+// http://okmij.org/ftp/ML/generalization.html
+
 module algorithm-j-levels
 
 import hm-expr
@@ -157,7 +160,7 @@ fun substitute(t : ty, subst: list<(int, ty)>)
         Bound(t') -> t'.substitute(subst)
         Unbound(id) ->
           match subst.lookup(fn(id') id == id')
-            Just(new-t) -> new-t.substitute(subst)
+            Just(new-t) -> new-t
             Nothing -> t
     TFn(param, result) -> 
       TFn(param.substitute(subst), result.substitute(subst))
